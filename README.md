@@ -1,6 +1,6 @@
 # pumila
 
-Lighter replacement for Netflix hystrix latency and fault tolerance library
+Lighter Clojure replacement for Netflix hystrix latency and fault tolerance library
 
 ## Usage
 

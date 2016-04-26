@@ -25,7 +25,8 @@
 
 (defn queue*
   [commander
-   {:keys [timeout fallback-fn error-fn] :as options}
+   {:keys [timeout fallback-fn error-fn timeout-val] :as options
+    :or {timeout-val ::timeout}}
    run-fn args]
   (let [^ExecutorService executor (:executor commander)
         ^ScheduledExecutorService scheduler (:scheduler commander)
@@ -43,16 +44,17 @@
                                                             (catch Exception _ nil))))))]
                           (deliver result res))
         ^Runnable timeout-task (when timeout
-                                 #(do (when error-fn
-                                        (let [e (ex-info "Timeout with queue asynchronous call"
-                                                         {:commander (:label commander) :args args
-                                                          :timeout timeout :type :timeout :options options})]
-                                          (error-fn e)))
-                                      (if fallback-fn
-                                        (try
-                                          (deliver result (apply fallback-fn args))
-                                          (catch Exception _ (deliver result ::timeout)))
-                                        (deliver result ::timeout))))]
+                                 #(when  (not (realized? result))
+                                    (when error-fn
+                                      (let [e (ex-info "Timeout with queue asynchronous call"
+                                                       {:commander (:label commander) :args args
+                                                        :timeout timeout :type :timeout :options options})]
+                                        (error-fn e)))
+                                    (if fallback-fn
+                                      (try
+                                        (deliver result (apply fallback-fn args))
+                                        (catch Exception _ (deliver result timeout-val)))
+                                      (deliver result timeout-val))))]
     (.submit executor task)
     (when timeout-task (.schedule scheduler timeout-task timeout java.util.concurrent.TimeUnit/MILLISECONDS))
     result))
@@ -80,12 +82,12 @@
 
 (defmacro queue
   ([commander options [run-fn & args]]
-   `(queue* ~commander ~options ~run-fn ~args))
+   `(queue* ~commander ~options ~run-fn (vector ~@args)))
   ([commander body]
    `(queue ~commander {} ~body)))
 
 (defmacro exec
   ([commander options [run-fn & args]]
-   `(exec* ~commander ~options ~run-fn ~args))
+   `(exec* ~commander ~options ~run-fn (vector ~@args)))
   ([commander body]
    `(exec ~commander {} ~body)))
