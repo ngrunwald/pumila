@@ -36,7 +36,7 @@
                                     (catch Exception e
                                       (let [exi (ex-info "Error calling command"
                                                          {:commander (:label commander) :args args
-                                                          :type :error :options options})]
+                                                          :type :error :options options} e)]
                                         (when-let [exp (::exp options)] (deliver exi e))
                                         (try (when error-fn (error-fn exi)) (catch Exception _ nil))
                                         (when fallback-fn (try
@@ -74,7 +74,7 @@
       (= result ::timeout) (let [e (ex-info "Timeout with exec synchronous call"
                                             {:commander (:label commander) :args args
                                              :timeout timeout :type :timeout :options options})]
-                             (when error-fn (error-fn e args))
+                             (when error-fn (error-fn e))
                              (if fallback-fn
                                (apply fallback-fn args)
                                (throw e)))
