@@ -1,7 +1,8 @@
 (ns pumila.core
-  (:import [io.aleph.dirigiste Executors]
+  (:import [io.aleph.dirigiste Executors Stats$Metric]
            [java.util.concurrent Callable ExecutorService
-            ScheduledExecutorService ScheduledThreadPoolExecutor]))
+            ScheduledExecutorService ScheduledThreadPoolExecutor]
+           [java.util EnumSet]))
 
 (defrecord Commander [label options executor scheduler])
 
@@ -11,10 +12,12 @@
      (.setMaximumPoolSize scheduler 1)
      (.setRemoveOnCancelPolicy scheduler true)
      (->Commander label options executor scheduler)))
-  ([{:keys [label timeout utilization max-size]
+  ([{:keys [label timeout utilization max-size all-stats]
      :or {utilization 0.8 max-size 10}
      :as opts}]
-   (make-commander opts (Executors/utilizationExecutor utilization max-size)))
+   (if all-stats
+     (make-commander opts (Executors/utilizationExecutor utilization (int max-size)))
+     (make-commander opts (Executors/utilizationExecutor utilization (int max-size) (EnumSet/allOf Stats$Metric)))))
   ([] (make-commander {})))
 
 (defn close
