@@ -37,7 +37,7 @@
 
 (defn ms
   [v]
-  (when v (* 1000 v)))
+  (when v (* 1000000 v)))
 
 (defn metric-name
   [metric nam]
