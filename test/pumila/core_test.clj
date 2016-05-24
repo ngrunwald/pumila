@@ -26,9 +26,9 @@
             (queue com {:metric "mymet"} (laggy-fn 10)))
     (let [tmout (promise)]
       (expect (more-of p
-                       :pumila.core/timeout (deref p 100 nil)
-                       Exception (deref tmout 100 nil))
-              (queue com {:timeout 10 :error-fn #(deliver tmout %)} (laggy-fn 100))))
+                       ;; :pumila.core/timeout (deref p)
+                       Exception (deref tmout))
+              (queue com {:timeout 10 :error-fn #(deliver tmout %)} (laggy-fn 1000))))
     (let [tmout (promise)]
       (expect (more-of p
                        :fallback (deref p 100 nil)

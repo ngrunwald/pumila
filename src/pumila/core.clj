@@ -105,24 +105,28 @@
         fut (.submit executor task)
         ^Runnable timeout-task (when timeout
                                  #(when  (not (realized? result))
+                                    (.cancel fut true)
+                                    (met/mark!
+                                     (if registry
+                                       (met/meter registry (metric-name metric "failure"))
+                                       (met/meter (metric-name metric "failure"))))
                                     (when error-fn
                                       (let [e (ex-info "Timeout with queue asynchronous call"
                                                        {:commander (:label commander) :args args
-                                                        :timeout timeout :type :timeout :options options})]
-                                        (when (.cancel fut true)
-                                          (met/mark!
-                                           (if registry
-                                             (met/meter registry (metric-name metric "failure"))
-                                             (met/meter (metric-name metric "failure")))))
-                                        (error-fn e)))
+                                                        :timeout timeout :type :timeout
+                                                        :options options})]
+                                        (try (error-fn e)
+                                             (catch Exception _ nil))))
                                     (if fallback-fn
                                       (try
                                         (when metric
                                           (deliver result (apply fallback-fn args)))
-                                        (catch Exception _ (deliver result timeout-val)))
+                                        (catch Exception _
+                                          (deliver result timeout-val)))
                                       (deliver result timeout-val))))]
     (when timeout-task
-      (let [cancel-fut (.schedule scheduler timeout-task timeout java.util.concurrent.TimeUnit/MILLISECONDS)]
+      (let [cancel-fut (.schedule scheduler timeout-task
+                                  timeout java.util.concurrent.TimeUnit/MILLISECONDS)]
         (deliver cancel-future-p cancel-fut)))
     (if metric
       (with-meta result
