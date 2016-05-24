@@ -1,7 +1,9 @@
 (ns pumila.core
-  (:require [metrics.timers :as tmr])
+  (:require [metrics
+             [timers :as tmr]
+             [meters :as met]])
   (:import [io.aleph.dirigiste Executors Stats$Metric]
-           [java.util.concurrent Callable ExecutorService
+           [java.util.concurrent Callable ExecutorService Future
             ScheduledExecutorService ScheduledThreadPoolExecutor]
            [java.util EnumSet]))
 
@@ -45,7 +47,7 @@
 
 (defn queue*
   [commander
-   {:keys [timeout fallback-fn error-fn timeout-val metric] :as options
+   {:keys [timeout fallback-fn error-fn timeout-val metric registry] :as options
     :or {timeout-val ::timeout}}
    run-fn args]
   (let [^ExecutorService executor (:executor commander)
@@ -53,11 +55,17 @@
         result (promise)
         queue-duration-atom (when metric (promise))
         call-duration-atom (when metric (promise))
-        queue-timer (when metric (tmr/start (tmr/timer (metric-name metric "queue-duration"))))
+        queue-timer (when metric (tmr/start
+                                  (if registry
+                                    (tmr/timer registry (metric-name metric "queue-duration"))
+                                    (tmr/timer (metric-name metric "queue-duration")))))
+        cancel-future-p (when timeout (promise))
         ^Runnable task #(let [res (let [queue-latency (when metric (tmr/stop queue-timer))
                                         call-timer (when metric
-                                                     (tmr/start (tmr/timer
-                                                                 (metric-name metric "call-duration"))))]
+                                                     (tmr/start
+                                                      (if registry
+                                                        (tmr/timer registry (metric-name metric "call-duration"))
+                                                        (tmr/timer (metric-name metric "call-duration")))))]
                                     (when metric
                                       (deliver queue-duration-atom (ms queue-latency)))
                                     (try
@@ -65,6 +73,13 @@
                                             latency (when call-timer (tmr/stop call-timer))]
                                         (when metric
                                           (deliver call-duration-atom (ms latency)))
+                                        (met/mark!
+                                         (if registry
+                                           (met/meter registry (metric-name metric "success"))
+                                           (met/meter (metric-name metric "success"))))
+                                        (when timeout
+                                          (when-let [^Future cancel-fut (deref cancel-future-p 1 nil)]
+                                            (.cancel cancel-fut true)))
                                         call-result)
                                       (catch Exception e
                                         (let [exi (ex-info "Error calling command"
@@ -74,6 +89,10 @@
                                           (when metric
                                             (deliver queue-duration-atom (ms queue-latency)))
                                           (try (when error-fn (error-fn exi)) (catch Exception _ nil))
+                                          (met/mark!
+                                           (if registry
+                                             (met/meter registry (metric-name metric "failure"))
+                                             (met/meter (metric-name metric "failure"))))
                                           (when fallback-fn
                                             (try
                                               (let [fallback-res (apply fallback-fn args)
@@ -83,12 +102,18 @@
                                                 fallback-res)
                                               (catch Exception _ nil)))))))]
                           (deliver result res))
+        fut (.submit executor task)
         ^Runnable timeout-task (when timeout
                                  #(when  (not (realized? result))
                                     (when error-fn
                                       (let [e (ex-info "Timeout with queue asynchronous call"
                                                        {:commander (:label commander) :args args
                                                         :timeout timeout :type :timeout :options options})]
+                                        (when (.cancel fut true)
+                                          (met/mark!
+                                           (if registry
+                                             (met/meter registry (metric-name metric "failure"))
+                                             (met/meter (metric-name metric "failure")))))
                                         (error-fn e)))
                                     (if fallback-fn
                                       (try
@@ -96,9 +121,9 @@
                                           (deliver result (apply fallback-fn args)))
                                         (catch Exception _ (deliver result timeout-val)))
                                       (deliver result timeout-val))))]
-    (.submit executor task)
     (when timeout-task
-      (.schedule scheduler timeout-task timeout java.util.concurrent.TimeUnit/MILLISECONDS))
+      (let [cancel-fut (.schedule scheduler timeout-task timeout java.util.concurrent.TimeUnit/MILLISECONDS)]
+        (deliver cancel-future-p cancel-fut)))
     (if metric
       (with-meta result
         {:queue-duration queue-duration-atom :call-duration call-duration-atom})
@@ -113,7 +138,9 @@
                  (assoc ::exp exp)
                  (dissoc :timeout))
         p (queue* commander opts run-fn args)
-        result (deref p timeout ::timeout)
+        result (if timeout
+                 (deref p timeout ::timeout)
+                 (deref p))
         queue-duration (some-> p (meta) (:queue-duration) (deref 1 nil))
         call-duration (some-> p (meta) (:call-duration) (deref 1 nil))]
     (cond
