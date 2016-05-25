@@ -7,6 +7,14 @@
             ScheduledExecutorService ScheduledThreadPoolExecutor]
            [java.util EnumSet]))
 
+(defn unwrap-promises
+  [m]
+  (reduce (fn [acc [k v]]
+            (if (instance? clojure.lang.IPending v)
+              (assoc acc k (deref v 1 nil))
+              acc))
+          m m))
+
 (defrecord Commander [label options executor scheduler])
 
 (defn make-commander
@@ -37,21 +45,22 @@
 
 (defn ms
   [v]
-  (when v (* 1000000 v)))
+  (when v (/ v 1000000.0)))
 
 (defn metric-name
   [metric nam]
   (if (string? metric)
     (str metric "-" nam)
-    (conj (into [] (take 2 metric)) "queue-duration")))
+    (conj (into [] (take 2 metric)) nam)))
 
 (defn queue*
   [commander
-   {:keys [timeout fallback-fn error-fn timeout-val metric registry] :as options
+   {:keys [timeout fallback-fn error-fn timeout-val metric] :as options
     :or {timeout-val ::timeout}}
    run-fn args]
   (let [^ExecutorService executor (:executor commander)
         ^ScheduledExecutorService scheduler (:scheduler commander)
+        registry (or (:registry options) (:registry commander))
         result (promise)
         queue-duration-atom (when metric (promise))
         call-duration-atom (when metric (promise))
