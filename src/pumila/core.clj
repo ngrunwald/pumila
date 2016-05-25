@@ -15,14 +15,16 @@
               acc))
           m m))
 
-(defrecord Commander [label options executor scheduler])
+(defrecord Commander [label options executor scheduler registry])
 
 (defn make-commander
-  ([{:keys [label timeout] :as options} executor]
+  ([{:keys [label timeout registry] :as options} executor]
    (let [scheduler (ScheduledThreadPoolExecutor. 0)]
      (.setMaximumPoolSize scheduler 1)
      (.setRemoveOnCancelPolicy scheduler true)
-     (->Commander label options executor scheduler)))
+     (map->Commander {:label label :options options
+                      :executor executor :scheduler scheduler
+                      :registry registry})))
   ([{:keys [label timeout utilization max-size all-stats]
      :or {utilization 0.8 max-size 10}
      :as opts}]
