@@ -38,7 +38,7 @@
                  Exception (deref tmout))
         (with-com [com {}]
           (let [tmout (promise)]
-            [(queue com {:timeout 10 :error-fn #(deliver tmout %)} (laggy-fn 1000)) tmout])))
+            [(queue com {:timeout 10 :error-fn #(deliver tmout %)} (laggy-fn 10000)) tmout])))
 (expect (more-of [p tmout]
                  :fallback (deref p 100 nil)
                  Exception (deref tmout 100 nil))

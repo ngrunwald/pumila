@@ -83,27 +83,29 @@
                                       (let [call-result (apply run-fn args)
                                             latency (when call-timer (tmr/stop call-timer))]
                                         (when metric
-                                          (deliver call-duration-atom (ms latency)))
-                                        (met/mark!
-                                         (if registry
-                                           (met/meter registry (metric-name metric "success"))
-                                           (met/meter (metric-name metric "success"))))
+                                          (deliver call-duration-atom (ms latency))
+                                          (met/mark!
+                                           (if registry
+                                             (met/meter registry (metric-name metric "success"))
+                                             (met/meter (metric-name metric "success")))))
                                         (when timeout
                                           (when-let [^Future cancel-fut (deref cancel-future-p 1 nil)]
                                             (.cancel cancel-fut true)))
                                         call-result)
+                                      (catch InterruptedException _
+                                        ::skip)
                                       (catch Exception e
                                         (let [exi (ex-info "Error calling command"
                                                            {:commander (:label commander) :args args
                                                             :type :error :options options} e)]
                                           (when-let [exp (::exp options)] (deliver exi e))
                                           (when metric
-                                            (deliver queue-duration-atom (ms queue-latency)))
+                                            (deliver queue-duration-atom (ms queue-latency))
+                                            (met/mark!
+                                             (if registry
+                                               (met/meter registry (metric-name metric "failure"))
+                                               (met/meter (metric-name metric "failure")))))
                                           (try (when error-fn (error-fn exi)) (catch Exception _ nil))
-                                          (met/mark!
-                                           (if registry
-                                             (met/meter registry (metric-name metric "failure"))
-                                             (met/meter (metric-name metric "failure"))))
                                           (when fallback-fn
                                             (try
                                               (let [fallback-res (apply fallback-fn args)
@@ -112,15 +114,17 @@
                                                   (deliver call-duration-atom (ms latency)))
                                                 fallback-res)
                                               (catch Exception _ nil)))))))]
-                          (deliver result res))
+                          (when-not (= ::skip res)
+                            (deliver result res)))
         fut (.submit executor task)
         ^Runnable timeout-task (when timeout
-                                 #(when  (not (realized? result))
+                                 #(when (not (realized? result))
                                     (.cancel fut true)
-                                    (met/mark!
-                                     (if registry
-                                       (met/meter registry (metric-name metric "failure"))
-                                       (met/meter (metric-name metric "failure"))))
+                                    (when metric
+                                      (met/mark!
+                                       (if registry
+                                         (met/meter registry (metric-name metric "failure"))
+                                         (met/meter (metric-name metric "failure")))))
                                     (when error-fn
                                       (let [e (ex-info "Timeout with queue asynchronous call"
                                                        {:commander (:label commander) :args args
@@ -130,8 +134,7 @@
                                              (catch Exception _ nil))))
                                     (if fallback-fn
                                       (try
-                                        (when metric
-                                          (deliver result (apply fallback-fn args)))
+                                        (deliver result (apply fallback-fn args))
                                         (catch Exception _
                                           (deliver result timeout-val)))
                                       (deliver result timeout-val))))]
