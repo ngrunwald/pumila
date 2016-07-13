@@ -4,7 +4,8 @@
              [meters :as met]])
   (:import [io.aleph.dirigiste Executors Stats$Metric]
            [java.util.concurrent Callable ExecutorService Future
-            ScheduledExecutorService ScheduledThreadPoolExecutor]
+            ScheduledExecutorService ScheduledThreadPoolExecutor
+            RejectedExecutionException]
            [java.util EnumSet]))
 
 (defn unwrap-promises
@@ -15,7 +16,7 @@
               acc))
           m m))
 
-(defrecord Commander [label options executor scheduler registry])
+(defrecord Commander [label options executor scheduler registry active])
 
 (defn make-commander
   ([{:keys [label timeout registry] :as options} executor]
@@ -24,7 +25,8 @@
      (.setRemoveOnCancelPolicy scheduler true)
      (map->Commander {:label label :options options
                       :executor executor :scheduler scheduler
-                      :registry registry})))
+                      :registry registry
+                      :active (atom 0)})))
   ([{:keys [label timeout utilization max-size all-stats]
      :or {utilization 0.8 max-size 10}
      :as opts}]
@@ -54,6 +56,21 @@
   (if (string? metric)
     (str metric "-" nam)
     (conj (into [] (take 2 metric)) nam)))
+
+(defn try-submit
+  [executor task]
+  (try
+    (.submit executor task)
+    (catch RejectedExecutionException e
+      nil)))
+
+(defn try-until-free
+  [executor task]
+  (if-let [fut (try-submit executor task)]
+    fut
+    (do
+      (Thread/sleep 100)
+      (recur executor task))))
 
 (defn queue*
   [commander
@@ -116,7 +133,7 @@
                                               (catch Exception _ nil)))))))]
                           (when-not (= ::skip res)
                             (deliver result res)))
-        fut (.submit executor task)
+        fut (try-until-free executor task)
         ^Runnable timeout-task (when timeout
                                  #(when (not (realized? result))
                                     (.cancel fut true)
