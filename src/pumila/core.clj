@@ -65,16 +65,21 @@
       nil)))
 
 (defn try-until-free
-  ([executor task {:keys [mode timeout]}]
-   (loop [started (if (and (= mode :block) timeout) (System/currentTimeMillis) nil)]
+  ([executor task {:keys [reject-policy timeout]}]
+   (loop [started (if (and (= reject-policy :block) timeout) (System/currentTimeMillis) nil)]
      (if-let [fut (try-submit executor task)]
        [fut (if started (- (System/currentTimeMillis) started) 0)]
-       (if (and started
-                (< (- (System/currentTimeMillis) started) timeout))
+       (cond
+         (= reject-policy :block)
          (do
-           (Thread/sleep (if timeout (min (int (/ timeout 10.0)) 100) 100))
+           (Thread/sleep 100)
            (recur started))
-         (throw (RejectedExecutionException.))))))
+         (and started
+              (< (- (System/currentTimeMillis) started) timeout))
+         (do
+           (Thread/sleep (min (int (/ timeout 10.0)) 100))
+           (recur started))
+         :else (throw (RejectedExecutionException.))))))
   ([executor task] (try-until-free executor task {})))
 
 (defn queue*
