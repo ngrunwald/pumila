@@ -65,16 +65,21 @@
       nil)))
 
 (defn try-until-free
-  [executor task]
-  (if-let [fut (try-submit executor task)]
-    fut
-    (do
-      (Thread/sleep 100)
-      (recur executor task))))
+  ([executor task {:keys [mode timeout]}]
+   (loop [started (if (= mode :block) (System/currentTimeMillis) nil)]
+     (if-let [fut (try-submit executor task)]
+       [fut (if started (- (System/currentTimeMillis) started) 0)]
+       (if (and (= mode :block)
+                (< (- (System/currentTimeMillis) started) timeout))
+         (do
+           (Thread/sleep 100)
+           (recur started))
+         (throw (RejectedExecutionException.))))))
+  ([executor task] (try-until-free executor task {})))
 
 (defn queue*
   [commander
-   {:keys [timeout fallback-fn error-fn timeout-val metric] :as options
+   {:keys [timeout fallback-fn error-fn timeout-val metric reject-policy] :as options
     :or {timeout-val ::timeout}}
    run-fn args]
   (let [^ExecutorService executor (:executor commander)
@@ -133,7 +138,7 @@
                                               (catch Exception _ nil)))))))]
                           (when-not (= ::skip res)
                             (deliver result res)))
-        fut (try-until-free executor task)
+        [fut elapsed] (try-until-free executor task {:reject-policy reject-policy :timeout timeout})
         ^Runnable timeout-task (when timeout
                                  #(when (not (realized? result))
                                     (.cancel fut true)
@@ -157,7 +162,7 @@
                                       (deliver result timeout-val))))]
     (when timeout-task
       (let [cancel-fut (.schedule scheduler timeout-task
-                                  timeout java.util.concurrent.TimeUnit/MILLISECONDS)]
+                                  (- timeout elapsed) java.util.concurrent.TimeUnit/MILLISECONDS)]
         (deliver cancel-future-p cancel-fut)))
     (if metric
       (with-meta result
