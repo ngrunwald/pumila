@@ -66,10 +66,10 @@
 
 (defn try-until-free
   ([executor task {:keys [mode timeout]}]
-   (loop [started (if (= mode :block) (System/currentTimeMillis) nil)]
+   (loop [started (if (and (= mode :block) timeout) (System/currentTimeMillis) nil)]
      (if-let [fut (try-submit executor task)]
        [fut (if started (- (System/currentTimeMillis) started) 0)]
-       (if (and (= mode :block)
+       (if (and started
                 (< (- (System/currentTimeMillis) started) timeout))
          (do
            (Thread/sleep (if timeout (min (int (/ timeout 10.0)) 100) 100))
