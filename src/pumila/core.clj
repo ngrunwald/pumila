@@ -72,7 +72,7 @@
        (if (and (= mode :block)
                 (< (- (System/currentTimeMillis) started) timeout))
          (do
-           (Thread/sleep 100)
+           (Thread/sleep (if timeout (min (int (/ timeout 10.0)) 100) 100))
            (recur started))
          (throw (RejectedExecutionException.))))))
   ([executor task] (try-until-free executor task {})))
