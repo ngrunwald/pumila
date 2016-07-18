@@ -125,7 +125,7 @@
                                         (let [exi (ex-info "Error calling command"
                                                            {:commander (:label commander) :args args
                                                             :type :error :options options} e)]
-                                          (when-let [exp (::exp options)] (deliver exi e))
+                                          (when-let [exp (::exp options)] (deliver exp e))
                                           (when metric
                                             (deliver queue-duration-atom (ms queue-latency))
                                             (met/mark!
