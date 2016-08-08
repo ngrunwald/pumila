@@ -1,7 +1,9 @@
 (ns pumila.core
   (:require [metrics
              [timers :as tmr]
-             [meters :as met]])
+             [meters :as met]]
+            [diehard [core :as diehard]
+                     [circuit-breaker :as cb]])
   (:import [io.aleph.dirigiste Executors Stats$Metric]
            [java.util.concurrent Callable ExecutorService Future
             ScheduledExecutorService ScheduledThreadPoolExecutor
@@ -57,29 +59,30 @@
     (str metric "-" nam)
     (conj (into [] (take 2 metric)) nam)))
 
-(defn try-submit
+(defn submit
   [executor task]
-  (try
-    (.submit executor task)
-    (catch RejectedExecutionException e
-      nil)))
+  (.submit executor task))
+
+(def retry-policies {:none    {:max-retries 0}
+                     :block   {:delay-ms 100}
+                     :backoff {:backoff-ms [100 120000 4]}})
+
+(defn mk-retry-policy
+  [opts]
+  (if (map? opts)
+    opts
+    (get retry-policies opts {:max-retries 0})))
 
 (defn try-until-free
   ([executor task {:keys [reject-policy timeout]}]
-   (loop [started (if (and (= reject-policy :block) timeout) (System/currentTimeMillis) nil)]
-     (if-let [fut (try-submit executor task)]
-       [fut (if started (- (System/currentTimeMillis) started) 0)]
-       (cond
-         (= reject-policy :block)
-         (do
-           (Thread/sleep 100)
-           (recur started))
-         (and started
-              (< (- (System/currentTimeMillis) started) timeout))
-         (do
-           (Thread/sleep (min (int (/ timeout 10.0)) 100))
-           (recur started))
-         :else (throw (RejectedExecutionException.))))))
+   (let [retry-policy (mk-retry-policy reject-policy)
+         retry-policy (if timeout
+                        (assoc retry-policy :max-duration timeout)
+                        retry-policy)
+         started (System/currentTimeMillis)
+         fut (diehard/with-retry retry-policy
+               (submit executor task))]
+     [fut (- (System/currentTimeMillis) started)]))
   ([executor task] (try-until-free executor task {})))
 
 (defn queue*
