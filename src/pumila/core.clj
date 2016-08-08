@@ -152,25 +152,22 @@
          :or {timeout-val ::timeout}} options]
     (fn []
      (when (not (realized? result))
-                                      (.cancel fut true)
-                                      (when metric
-                                        (met/mark!
-                                         (if registry
-                                           (met/meter registry (metric-name metric "failure"))
-                                           (met/meter (metric-name metric "failure")))))
-                                      (when error-fn
-                                        (let [e (ex-info "Timeout with queue asynchronous call"
-                                                         {:commander (:label commander) :args args
-                                                          :timeout timeout :type :timeout
-                                                          :options options})]
-                                          (try (error-fn e)
-                                               (catch Exception _ nil))))
-                                      (if fallback-fn
-                                        (try
-                                          (deliver result (apply fallback-fn args))
-                                          (catch Exception _
-                                            (deliver result timeout-val)))
-                                        (deliver result timeout-val))))))
+           (.cancel fut true)
+           (when metric
+             (met/mark! (mk-meter registry metric "failure")))
+           (when error-fn
+             (let [e (ex-info "Timeout with queue asynchronous call"
+                              {:commander (:label commander) :args args
+                               :timeout timeout :type :timeout
+                               :options options})]
+               (try (error-fn e)
+                    (catch Exception _ nil))))
+           (if fallback-fn
+             (try
+               (deliver result (apply fallback-fn args))
+               (catch Exception _
+                 (deliver result timeout-val)))
+             (deliver result timeout-val))))))
 
 (defn queue*
   [commander options run-fn args]
