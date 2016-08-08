@@ -85,89 +85,110 @@
      [fut (- (System/currentTimeMillis) started)]))
   ([executor task] (try-until-free executor task {})))
 
+(defn start-timer
+  [registry metric m-name]
+  (tmr/start
+    (if registry
+      (tmr/timer registry (metric-name metric m-name))
+      (tmr/timer (metric-name metric m-name)))))
+
+(defn mk-meter
+  [registry metric m-name]
+  (if registry
+    (met/meter registry (metric-name metric m-name))
+    (met/meter (metric-name metric m-name))))
+
+(defn mk-task
+  ^Runnable
+  [commander options promises run-fn args]
+  (let [registry (or (:registry options) (:registry commander))
+        {:keys [timeout fallback-fn error-fn metric]} options
+        {:keys [result queue-duration-atom
+                call-duration-atom cancel-future-p]} promises
+        queue-timer (when metric (start-timer registry metric "queue-duration"))]
+    (fn [] (let [res (let [queue-latency (when metric (tmr/stop queue-timer))
+                          call-timer (when metric (start-timer registry metric "call-duration"))]
+                      (when metric
+                        (deliver queue-duration-atom (ms queue-latency)))
+                      (try
+                        (let [call-result (apply run-fn args)
+                              latency (when call-timer (tmr/stop call-timer))]
+                          (when metric
+                            (deliver call-duration-atom (ms latency))
+                            (met/mark! (mk-meter registry metric "success")))
+                          (when timeout
+                            (when-let [^Future cancel-fut (deref cancel-future-p 1 nil)]
+                              (.cancel cancel-fut true)))
+                          call-result)
+                        (catch InterruptedException _
+                          ::skip)
+                        (catch Exception e
+                          (let [exi (ex-info "Error calling command"
+                                             {:commander (:label commander) :args args
+                                              :type :error :options options} e)]
+                            (when-let [exp (::exp options)] (deliver exp exi))
+                            (when metric
+                              (deliver queue-duration-atom (ms queue-latency))
+                              (met/mark! (mk-meter registry metric "failure")))
+                            (when error-fn
+                              (try (error-fn exi)
+                                (catch Exception _ nil)))
+                            (when fallback-fn
+                              (try
+                                (let [fallback-res (apply fallback-fn args)
+                                      latency (when call-timer (tmr/stop call-timer))]
+                                  (when metric
+                                    (deliver call-duration-atom (ms latency)))
+                                  fallback-res)
+                                (catch Exception _ nil)))))))]
+            (when-not (= ::skip res)
+              (deliver result res))))))
+
+(defn mk-timeout-task
+  ^Runnable
+  [commander options result fut args]
+  (let [registry (or (:registry options) (:registry commander))
+        {:keys [timeout fallback-fn error-fn timeout-val metric]
+         :or {timeout-val ::timeout}} options]
+    (fn []
+     (when (not (realized? result))
+                                      (.cancel fut true)
+                                      (when metric
+                                        (met/mark!
+                                         (if registry
+                                           (met/meter registry (metric-name metric "failure"))
+                                           (met/meter (metric-name metric "failure")))))
+                                      (when error-fn
+                                        (let [e (ex-info "Timeout with queue asynchronous call"
+                                                         {:commander (:label commander) :args args
+                                                          :timeout timeout :type :timeout
+                                                          :options options})]
+                                          (try (error-fn e)
+                                               (catch Exception _ nil))))
+                                      (if fallback-fn
+                                        (try
+                                          (deliver result (apply fallback-fn args))
+                                          (catch Exception _
+                                            (deliver result timeout-val)))
+                                        (deliver result timeout-val))))))
+
 (defn queue*
-  [commander
-   {:keys [timeout fallback-fn error-fn timeout-val metric reject-policy] :as options
-    :or {timeout-val ::timeout}}
-   run-fn args]
+  [commander options run-fn args]
   (let [^ExecutorService executor (:executor commander)
         ^ScheduledExecutorService scheduler (:scheduler commander)
-        registry (or (:registry options) (:registry commander))
+        {:keys [metric timeout reject-policy]} options
         result (promise)
         queue-duration-atom (when metric (promise))
         call-duration-atom (when metric (promise))
-        queue-timer (when metric (tmr/start
-                                  (if registry
-                                    (tmr/timer registry (metric-name metric "queue-duration"))
-                                    (tmr/timer (metric-name metric "queue-duration")))))
         cancel-future-p (when timeout (promise))
-        ^Runnable task #(let [res (let [queue-latency (when metric (tmr/stop queue-timer))
-                                        call-timer (when metric
-                                                     (tmr/start
-                                                      (if registry
-                                                        (tmr/timer registry (metric-name metric "call-duration"))
-                                                        (tmr/timer (metric-name metric "call-duration")))))]
-                                    (when metric
-                                      (deliver queue-duration-atom (ms queue-latency)))
-                                    (try
-                                      (let [call-result (apply run-fn args)
-                                            latency (when call-timer (tmr/stop call-timer))]
-                                        (when metric
-                                          (deliver call-duration-atom (ms latency))
-                                          (met/mark!
-                                           (if registry
-                                             (met/meter registry (metric-name metric "success"))
-                                             (met/meter (metric-name metric "success")))))
-                                        (when timeout
-                                          (when-let [^Future cancel-fut (deref cancel-future-p 1 nil)]
-                                            (.cancel cancel-fut true)))
-                                        call-result)
-                                      (catch InterruptedException _
-                                        ::skip)
-                                      (catch Exception e
-                                        (let [exi (ex-info "Error calling command"
-                                                           {:commander (:label commander) :args args
-                                                            :type :error :options options} e)]
-                                          (when-let [exp (::exp options)] (deliver exp exi))
-                                          (when metric
-                                            (deliver queue-duration-atom (ms queue-latency))
-                                            (met/mark!
-                                             (if registry
-                                               (met/meter registry (metric-name metric "failure"))
-                                               (met/meter (metric-name metric "failure")))))
-                                          (try (when error-fn (error-fn exi)) (catch Exception _ nil))
-                                          (when fallback-fn
-                                            (try
-                                              (let [fallback-res (apply fallback-fn args)
-                                                    latency (when call-timer (tmr/stop call-timer))]
-                                                (when metric
-                                                  (deliver call-duration-atom (ms latency)))
-                                                fallback-res)
-                                              (catch Exception _ nil)))))))]
-                          (when-not (= ::skip res)
-                            (deliver result res)))
+        promises {:result result
+                  :queue-duration-atom queue-duration-atom
+                  :call-duration-atom call-duration-atom
+                  :cancel-future-p cancel-future-p}
+        ^Runnable task (mk-task commander options promises run-fn args)
         [fut elapsed] (try-until-free executor task {:reject-policy reject-policy :timeout timeout})
         ^Runnable timeout-task (when timeout
-                                 #(when (not (realized? result))
-                                    (.cancel fut true)
-                                    (when metric
-                                      (met/mark!
-                                       (if registry
-                                         (met/meter registry (metric-name metric "failure"))
-                                         (met/meter (metric-name metric "failure")))))
-                                    (when error-fn
-                                      (let [e (ex-info "Timeout with queue asynchronous call"
-                                                       {:commander (:label commander) :args args
-                                                        :timeout timeout :type :timeout
-                                                        :options options})]
-                                        (try (error-fn e)
-                                             (catch Exception _ nil))))
-                                    (if fallback-fn
-                                      (try
-                                        (deliver result (apply fallback-fn args))
-                                        (catch Exception _
-                                          (deliver result timeout-val)))
-                                      (deliver result timeout-val))))]
+                                 (mk-timeout-task commander options result fut args))]
     (when timeout-task
       (let [cancel-fut (.schedule scheduler timeout-task
                                   (- timeout elapsed) java.util.concurrent.TimeUnit/MILLISECONDS)]
