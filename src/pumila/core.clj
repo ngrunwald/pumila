@@ -77,7 +77,7 @@
   ([executor task {:keys [reject-policy timeout]}]
    (let [retry-policy (mk-retry-policy reject-policy)
          retry-policy (if timeout
-                        (assoc retry-policy :max-duration timeout)
+                        (assoc retry-policy :max-duration-ms timeout)
                         retry-policy)
          started (System/currentTimeMillis)
          fut (diehard/with-retry retry-policy
