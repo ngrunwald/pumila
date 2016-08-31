@@ -47,7 +47,7 @@
 (defn add-meta
   [v m]
   (if (and m (instance? clojure.lang.IMeta v))
-    (with-meta v m)
+    (with-meta v (merge (meta v) m))
     v))
 
 (defn ms
@@ -207,8 +207,7 @@
                                   (- timeout elapsed) java.util.concurrent.TimeUnit/MILLISECONDS)]
         (deliver cancel-future-p cancel-fut)))
     (if metric
-      (with-meta result
-        {:queue-duration queue-duration-atom :call-duration call-duration-atom})
+      (add-meta result {:queue-duration queue-duration-atom :call-duration call-duration-atom})
       result)))
 
 (defn exec*
