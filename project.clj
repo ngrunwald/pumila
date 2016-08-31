@@ -1,4 +1,4 @@
-(defproject pumila "0.1.4-SNAPSHOT"
+(defproject pumila "0.1.4"
   :description "Lighter replacement for Netflix hystrix latency and fault tolerance library"
   :url "https://github.com/ngrunwald/pumila"
   :license {:name "Eclipse Public License"
