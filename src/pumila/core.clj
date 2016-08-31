@@ -13,11 +13,12 @@
 
 (defn unwrap-promises
   [m]
-  (reduce (fn [acc [k v]]
-            (if (instance? clojure.lang.IPending v)
-              (assoc acc k (deref v 1 nil))
-              acc))
-          m m))
+  (persistent!
+   (reduce (fn [acc [k v]]
+             (if (instance? clojure.lang.IPending v)
+               (assoc! acc k (deref v 1 nil))
+               acc))
+           (transient m) m)))
 
 (defrecord Commander [label options executor scheduler registry active])
 
@@ -47,7 +48,7 @@
 (defn add-meta
   [v m]
   (if (and m (instance? clojure.lang.IMeta v))
-    (with-meta v (merge (meta v) m))
+    (with-meta v m)
     v))
 
 (defn ms
