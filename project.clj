@@ -9,4 +9,5 @@
                  [metrics-clojure "2.7.0"]]
   :profiles {:dev {:dependencies  [[expectations "2.1.9"]]
                    :plugins [[lein-expectations "0.0.7"]]}}
+  :global-vars  {*warn-on-reflection* true}
   :repl-options {:init-ns pumila.core})  
