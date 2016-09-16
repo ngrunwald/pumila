@@ -4,11 +4,12 @@
              [meters :as met]]
             [diehard [core :as diehard]
              [circuit-breaker :as cb]])
-  (:import [io.aleph.dirigiste Executors Stats$Metric]
+  (:import [io.aleph.dirigiste Executor Executors Stats$Metric]
            [java.util.concurrent Callable ExecutorService Future
             ScheduledExecutorService ScheduledThreadPoolExecutor
             RejectedExecutionException]
            [java.util EnumSet]
+           [java.util.concurrent TimeUnit]
            [clojure.lang ExceptionInfo]))
 
 (defn unwrap-promises
@@ -44,6 +45,13 @@
   (.shutdown scheduler)
   (.shutdown executor)
   commander)
+
+(defn await-termination
+  ([commander]
+   (await-termination commander 60000))
+  ([{:keys [^Executor executor] :as commander} termination-delay-ms]
+   (close commander)
+   (.awaitTermination executor termination-delay-ms TimeUnit/MILLISECONDS)))
 
 (defn add-meta
   [v m]
