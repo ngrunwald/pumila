@@ -21,7 +21,7 @@ Lighter Clojure replacement for Netflix hystrix latency and fault tolerance libr
 
 ## License
 
-Copyright © 2016 Nils Grunwald
+Copyright © 2016 Oscaro.com
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

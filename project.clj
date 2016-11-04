@@ -1,4 +1,4 @@
-(defproject pumila "0.1.5-SNAPSHOT"
+(defproject pumila "0.1.5"
   :description "Lighter replacement for Netflix hystrix latency and fault tolerance library"
   :url "https://github.com/ngrunwald/pumila"
   :license {:name "Eclipse Public License"
@@ -10,4 +10,4 @@
   :profiles {:dev {:dependencies  [[expectations "2.1.9"]]
                    :plugins [[lein-expectations "0.0.7"]]}}
   :global-vars  {*warn-on-reflection* true}
-  :repl-options {:init-ns pumila.core})  
+  :repl-options {:init-ns pumila.core})
