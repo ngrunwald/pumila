@@ -1,8 +1,9 @@
-(ns pumila.commander
-  "An implementation of a commander based on clojure-metrics
+(ns pumila.commander.reference
+  "A reference implementation of a commander based on clojure-metrics
    and java executor service."
   (:require [metrics.meters :as met]
-            [metrics.timers :as tmr])
+            [metrics.timers :as tmr]
+            [pumila.commander.protocol :as protocol])
   (:import (java.util.concurrent
             ExecutorService
             TimeUnit
@@ -37,8 +38,7 @@
    ^ScheduledExecutorService scheduler
    registry
    active]
-
-  pumila.core/Commander
+  protocol/Commander
   (human-readable [_this] label)
   (execute! [_this task] (.submit executor ^Runnable task))
   (schedule! [_this task timeout-ms]

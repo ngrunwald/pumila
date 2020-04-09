@@ -1,12 +1,9 @@
 (ns pumila.core-test
   (:require [clojure.test :refer :all]
             [pumila.core :as sut]
-            [pumila.commander :as commander]))
-
-(defn laggy-fn
-  [lag]
-  (Thread/sleep lag)
-  true)
+            [pumila.commander.reference :as commander]
+            [pumila.commander.protocol :as protocol]
+            [pumila.test-helpers :refer [laggy-fn]]))
 
 (defmacro with-com
   [binding & body]
@@ -18,7 +15,7 @@
 
 (deftest pumila-test
   (testing "The type of commander"
-    (is (satisfies? sut/Commander (with-com [com {}] com)))))
+    (is (satisfies? protocol/Commander (with-com [com {}] com)))))
 
 (deftest queue-test
   (testing "Queue the simplest way"
