@@ -1,8 +1,7 @@
 (ns pumila.core
   (:require [metrics
              [timers :as tmr]
-             [meters :as met]]
-            [diehard.core :as diehard])
+             [meters :as met]])
   (:import [io.aleph.dirigiste Executor Executors Stats$Metric]
            [java.util.concurrent ExecutorService Future
             ScheduledExecutorService ScheduledThreadPoolExecutor]
@@ -62,27 +61,11 @@
   [executor task]
   (.submit executor task))
 
-(def retry-policies {:none    {:max-retries 0}
-                     :block   {:delay-ms 100}
-                     :backoff {:backoff-ms [100 120000 4]}})
-
-(defn mk-retry-policy
-  [opts]
-  (if (map? opts)
-    opts
-    (get retry-policies opts {:max-retries 0})))
-
-(defn try-until-free
-  ([executor task {:keys [reject-policy timeout]}]
-   (let [retry-policy (mk-retry-policy reject-policy)
-         retry-policy (if timeout
-                        (assoc retry-policy :max-duration-ms timeout)
-                        retry-policy)
-         started (System/currentTimeMillis)
-         fut (diehard/with-retry retry-policy
-               (submit executor task))]
-     [fut (- (System/currentTimeMillis) started)]))
-  ([executor task] (try-until-free executor task {})))
+(defn submit-task
+  [executor task]
+  (let [started (System/currentTimeMillis)
+        fut (submit executor task)]
+    [fut (- (System/currentTimeMillis) started)]))
 
 (defn start-timer
   [registry metric m-name]
@@ -187,7 +170,7 @@
   [commander options run-fn args]
   (let [^ExecutorService executor (:executor commander)
         ^ScheduledExecutorService scheduler (:scheduler commander)
-        {:keys [metric timeout reject-policy]} options
+        {:keys [metric timeout]} options
         result (promise)
         queue-duration-atom (when metric (promise))
         call-duration-atom (when metric (promise))
@@ -197,7 +180,7 @@
                   :call-duration-atom call-duration-atom
                   :cancel-future-p cancel-future-p}
         ^Runnable task (mk-task commander options promises run-fn args)
-        [fut elapsed] (try-until-free executor task {:reject-policy reject-policy :timeout timeout})
+        [fut elapsed] (submit-task executor task)
         ^Runnable timeout-task (when timeout
                                  (mk-timeout-task commander options result fut args))]
     (when timeout-task
