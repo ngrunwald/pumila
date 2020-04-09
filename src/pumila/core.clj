@@ -254,10 +254,11 @@
   in the form of promise. Calling this function will
   deref each promises and return a map of their corresponding
   values"
-  [m]
+  [m & {:keys [deref-timeout]
+        :or {deref-timeout 1}}]
   (persistent!
    (reduce (fn [acc [k v]]
              (if (instance? clojure.lang.IPending v)
-               (assoc! acc k (deref v 1 nil))
+               (assoc! acc k (deref v deref-timeout nil))
                acc))
            (transient m) m)))

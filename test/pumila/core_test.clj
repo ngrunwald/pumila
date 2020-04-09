@@ -1,6 +1,6 @@
 (ns pumila.core-test
-  (:require [expectations :refer :all]
-            [pumila.core :refer :all]))
+  (:require [clojure.test :refer :all]
+            [pumila.core :as sut]))
 
 (defn laggy-fn
   [lag]
@@ -9,38 +9,53 @@
 
 (defmacro with-com
   [binding & body]
-  `(let [~(first binding) (make-commander ~(second binding))]
+  `(let [~(first binding) (sut/make-commander ~(second binding))]
      (try
        ~@body
        (finally
-         (close ~(first binding))))))
+         (sut/close ~(first binding))))))
 
-(expect pumila.core.Commander (with-com [com {}] com))
-(expect (more-of p
-                 true (deref p 100 nil)
-                 nil (:queue-duration (meta p))
-                 nil (:call-duration (meta p)))
-        (with-com [com {}]
-          (queue com (laggy-fn 10))))
-(expect true (with-com [com  {}]
-               (exec com (laggy-fn 10))))
-(expect (more-of p
-                 true (deref p 100 nil)
-                 #(>= % 0) (deref (:queue-duration (meta p)) 100 nil)
-                 #(>= % 10) (deref (:call-duration (meta p)) 100 nil))
-        (with-com [com {}]
-          (queue com {:metric "mymet"} (laggy-fn 10))))
-(expect (more-of [p tmout]
-                 :pumila.core/timeout (deref p)
-                 Exception (deref tmout))
-        (with-com [com {}]
-          (let [tmout (promise)]
-            [(queue com {:timeout 10 :error-fn #(deliver tmout %)} (laggy-fn 10000)) tmout])))
-(expect (more-of [p tmout]
-                 :fallback (deref p 100 nil)
-                 Exception (deref tmout 100 nil))
-        (with-com [com {}]
-          (let [tmout (promise)]
-            [(queue com {:error-fn #(deliver tmout %) :fallback-fn (constantly :fallback)}
-                    ((fn [] (throw (ex-info "error" {})))))
-             tmout])))
+(deftest pumila-test
+  (testing "The type of commander"
+    (is (= pumila.core.Commander (type (with-com [com {}] com))))))
+
+(deftest queue-test
+  (testing "Queue the simplest way"
+    (let [actual (with-com [com {}] (sut/queue com (laggy-fn 10)))
+          actual-metas (meta actual)]
+      (is (= true (deref actual 100 nil)))
+      (is (= [nil nil]
+             ((juxt :queue-duration :call-duration) actual-metas)))))
+
+  (testing "Queue with metrics"
+    (let [actual (with-com [com {}] (sut/queue com {:metric "mymet"} (laggy-fn 10)))
+          {:keys [queue-duration call-duration]} (sut/unwrap-promises (meta actual) :deref-timeout 100)]
+      (is (= true (deref actual 100 nil)))
+      (is (> queue-duration 0) "Queuing the job took some time")
+      (is (> call-duration 0) "Executing the job took some time")))
+
+  (testing "Queue with timeout and error side-effect"
+    (let [error-val (promise)
+          actual (with-com [com {}]
+                           (sut/queue com
+                                      {:timeout 10
+                                       :error-fn #(deliver error-val %)}
+                                      (laggy-fn 10000)))]
+      (is (= ::sut/timeout @actual))
+      (is (instance? Exception @error-val))))
+
+  (testing "Queue with timeout and error side-effect and fallback"
+    (let [error-val (promise)
+          fallback-val :fallback
+          actual (with-com [com {}]
+                           (sut/queue com
+                                      {:timeout 10
+                                       :error-fn #(deliver error-val %)
+                                       :fallback-fn (constantly fallback-val)}
+                                      (laggy-fn 10000)))]
+      (is (= :fallback @actual))
+      (is (instance? Exception @error-val)))))
+
+(deftest exec-test
+  (testing "Exec without metrics"
+    (is (= true (with-com [com {}] (sut/exec com (laggy-fn 10)))))))
