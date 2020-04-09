@@ -1,9 +1,6 @@
 (ns pumila.core-test
   (:require [expectations :refer :all]
-            [pumila.core :refer :all]
-            [metrics
-             [meters :as met]
-             [timers :as tmr]]))
+            [pumila.core :refer :all]))
 
 (defn laggy-fn
   [lag]

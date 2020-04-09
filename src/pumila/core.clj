@@ -2,29 +2,18 @@
   (:require [metrics
              [timers :as tmr]
              [meters :as met]]
-            [diehard [core :as diehard]
-             [circuit-breaker :as cb]])
+            [diehard.core :as diehard])
   (:import [io.aleph.dirigiste Executor Executors Stats$Metric]
-           [java.util.concurrent Callable ExecutorService Future
-            ScheduledExecutorService ScheduledThreadPoolExecutor
-            RejectedExecutionException]
+           [java.util.concurrent ExecutorService Future
+            ScheduledExecutorService ScheduledThreadPoolExecutor]
            [java.util EnumSet]
            [java.util.concurrent TimeUnit]
-           [clojure.lang ExceptionInfo]))
-
-(defn unwrap-promises
-  [m]
-  (persistent!
-   (reduce (fn [acc [k v]]
-             (if (instance? clojure.lang.IPending v)
-               (assoc! acc k (deref v 1 nil))
-               acc))
-           (transient m) m)))
+           [clojure.lang ExceptionInfo IMeta]))
 
 (defrecord Commander [label options executor scheduler registry active])
 
 (defn make-commander
-  ([{:keys [label timeout registry] :as options} executor]
+  ([{:keys [label registry] :as options} executor]
    (let [scheduler (ScheduledThreadPoolExecutor. 0)]
      (.setMaximumPoolSize scheduler 1)
      (.setRemoveOnCancelPolicy scheduler true)
@@ -32,7 +21,7 @@
                       :executor executor :scheduler scheduler
                       :registry registry
                       :active (atom 0)})))
-  ([{:keys [label timeout utilization max-size all-stats]
+  ([{:keys [utilization max-size all-stats]
      :or {utilization 0.8 max-size 10}
      :as opts}]
    (if all-stats
@@ -55,7 +44,7 @@
 
 (defn add-meta
   [v m]
-  (if (and m (instance? clojure.lang.IMeta v))
+  (if (and m (instance? IMeta v))
     (with-meta v m)
     v))
 
@@ -213,7 +202,7 @@
                                  (mk-timeout-task commander options result fut args))]
     (when timeout-task
       (let [cancel-fut (.schedule scheduler timeout-task
-                                  (- timeout elapsed) java.util.concurrent.TimeUnit/MILLISECONDS)]
+                                  (- timeout elapsed) TimeUnit/MILLISECONDS)]
         (deliver cancel-future-p cancel-fut)))
     (if metric
       (add-meta result {:queue-duration queue-duration-atom :call-duration call-duration-atom})
@@ -259,3 +248,16 @@
    `(exec* ~commander ~options ~run-fn (vector ~@args)))
   ([commander body]
    `(exec ~commander {} ~body)))
+
+(defn unwrap-promises
+  "The queue function will return metrics as meta-data
+  in the form of promise. Calling this function will
+  deref each promises and return a map of their corresponding
+  values"
+  [m]
+  (persistent!
+   (reduce (fn [acc [k v]]
+             (if (instance? clojure.lang.IPending v)
+               (assoc! acc k (deref v 1 nil))
+               acc))
+           (transient m) m)))
