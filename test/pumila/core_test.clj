@@ -1,6 +1,7 @@
 (ns pumila.core-test
   (:require [clojure.test :refer :all]
-            [pumila.core :as sut]))
+            [pumila.core :as sut]
+            [pumila.commander :as commander]))
 
 (defn laggy-fn
   [lag]
@@ -9,15 +10,15 @@
 
 (defmacro with-com
   [binding & body]
-  `(let [~(first binding) (sut/make-commander ~(second binding))]
+  `(let [~(first binding) (commander/make ~(second binding))]
      (try
        ~@body
        (finally
-         (sut/close ~(first binding))))))
+         (commander/close ~(first binding))))))
 
 (deftest pumila-test
   (testing "The type of commander"
-    (is (= pumila.core.Commander (type (with-com [com {}] com))))))
+    (is (satisfies? sut/Commander (with-com [com {}] com)))))
 
 (deftest queue-test
   (testing "Queue the simplest way"

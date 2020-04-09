@@ -1,45 +1,16 @@
 (ns pumila.core
-  (:require [metrics
-             [timers :as tmr]
-             [meters :as met]])
-  (:import [io.aleph.dirigiste Executor Executors Stats$Metric]
-           [java.util.concurrent ExecutorService Future
-            ScheduledExecutorService ScheduledThreadPoolExecutor]
-           [java.util EnumSet]
-           [java.util.concurrent TimeUnit]
+  (:import [java.util.concurrent Future]
            [clojure.lang ExceptionInfo IMeta]))
 
-(defrecord Commander [label options executor scheduler registry active])
 
-(defn make-commander
-  ([{:keys [label registry] :as options} executor]
-   (let [scheduler (ScheduledThreadPoolExecutor. 0)]
-     (.setMaximumPoolSize scheduler 1)
-     (.setRemoveOnCancelPolicy scheduler true)
-     (map->Commander {:label label :options options
-                      :executor executor :scheduler scheduler
-                      :registry registry
-                      :active (atom 0)})))
-  ([{:keys [utilization max-size all-stats]
-     :or {utilization 0.8 max-size 10}
-     :as opts}]
-   (if all-stats
-     (make-commander opts (Executors/utilizationExecutor utilization (int max-size)))
-     (make-commander opts (Executors/utilizationExecutor utilization (int max-size) (EnumSet/allOf Stats$Metric)))))
-  ([] (make-commander {})))
+(defprotocol Commander
+  (human-readable [this] "a human readable string")
+  (execute! [this ^Runnable  task] "Executes the task. Must return a deferencable object (like a future or a promise).")
+  (schedule! [this ^Runnable  task timeout-ms] "Executes task in the within timeout (in ms). Must return a deferencable object (like a future or a promise).")
+  (mark! [this metric event] "mark when an event happens. metric gives context to the event.")
+  (start-timer! [this metric timer-name] "starts a timer and returns it")
+  (stop-timer! [this timer] "stops a timer"))
 
-(defn close
-  [{:keys [executor scheduler] :as commander}]
-  (.shutdown scheduler)
-  (.shutdown executor)
-  commander)
-
-(defn await-termination
-  ([commander]
-   (await-termination commander 60000))
-  ([{:keys [^Executor executor] :as commander} termination-delay-ms]
-   (close commander)
-   (.awaitTermination executor termination-delay-ms TimeUnit/MILLISECONDS)))
 
 (defn add-meta
   [v m]
@@ -51,53 +22,31 @@
   [v]
   (when v (/ v 1000000.0)))
 
-(defn metric-name
-  [metric nam]
-  (if (string? metric)
-    (str metric "-" nam)
-    (conj (into [] (take 2 metric)) nam)))
-
-(defn submit
-  [executor task]
-  (.submit executor task))
-
 (defn submit-task
-  [executor task]
+  [commander task]
   (let [started (System/currentTimeMillis)
-        fut (submit executor task)]
+        fut (execute! commander task)]
     [fut (- (System/currentTimeMillis) started)]))
 
-(defn start-timer
-  [registry metric m-name]
-  (tmr/start
-   (if registry
-     (tmr/timer registry (metric-name metric m-name))
-     (tmr/timer (metric-name metric m-name)))))
 
-(defn mk-meter
-  [registry metric m-name]
-  (if registry
-    (met/meter registry (metric-name metric m-name))
-    (met/meter (metric-name metric m-name))))
 
 (defn mk-task
   ^Runnable
   [commander options promises run-fn args]
-  (let [registry (or (:registry options) (:registry commander))
-        {:keys [timeout fallback-fn error-fn metric]} options
+  (let [{:keys [timeout fallback-fn error-fn metric]} options
         {:keys [result queue-duration-atom
                 call-duration-atom cancel-future-p]} promises
-        queue-timer (when metric (start-timer registry metric "queue-duration"))]
-    (fn [] (let [res (let [queue-latency (when metric (tmr/stop queue-timer))
-                           call-timer (when metric (start-timer registry metric "call-duration"))]
+        queue-timer (when metric (start-timer! commander metric "queue-duration"))]
+    (fn [] (let [res (let [queue-latency (when metric (stop-timer! commander queue-timer))
+                           call-timer (when metric (start-timer! commander metric "call-duration"))]
                        (when metric
                          (deliver queue-duration-atom (ms queue-latency)))
                        (try
                          (let [call-result (apply run-fn args)
-                               latency (when call-timer (tmr/stop call-timer))]
+                               latency (when call-timer (stop-timer! commander call-timer))]
                            (when metric
                              (deliver call-duration-atom (ms latency))
-                             (met/mark! (mk-meter registry metric "success")))
+                             (mark! commander metric "success"))
                            (when timeout
                              (when-let [^Future cancel-fut (deref cancel-future-p 1 nil)]
                                (.cancel cancel-fut true)))
@@ -106,19 +55,22 @@
                            ::skip)
                          (catch Exception e
                            (let [exi (ex-info "Error calling command"
-                                              {:commander (:label commander) :args args
-                                               :type :error :options options} e)]
+                                              {:commander (human-readable commander)
+                                               :args args
+                                               :type :error
+                                               :options options}
+                                              e)]
                              (when-let [exp (::exp options)] (deliver exp exi))
                              (when metric
                                (deliver queue-duration-atom (ms queue-latency))
-                               (met/mark! (mk-meter registry metric "failure")))
+                               (mark! commander metric "failure"))
                              (when error-fn
                                (try (error-fn exi)
                                     (catch Exception _ nil)))
                              (when fallback-fn
                                (try
                                  (let [fallback-res (apply fallback-fn args)
-                                       latency (when call-timer (tmr/stop call-timer))]
+                                       latency (when call-timer (stop-timer! commander call-timer))]
                                    (when metric
                                      (deliver call-duration-atom (ms latency)))
                                    fallback-res)
@@ -135,25 +87,26 @@
      (catch Exception _ nil)))
   ([error-fn e msg]
    (handle-error error-fn e msg (ex-data e)))
-  ([error-fn e]
-   (handle-error error-fn e (.getMessage e) (ex-data e))))
+  ([error-fn ^Exception e]
+   (handle-error error-fn  e (.getMessage e) (ex-data e))))
 
 (defn mk-timeout-task
   ^Runnable
-  [commander options result fut args]
-  (let [registry (or (:registry options) (:registry commander))
-        {:keys [timeout fallback-fn error-fn timeout-val metric]
+  [commander options result ^Future fut args]
+  (let [{:keys [timeout fallback-fn error-fn timeout-val metric]
          :or {timeout-val ::timeout}} options]
     (fn []
       (try
         (when (not (realized? result))
           (.cancel fut true)
           (when metric
-            (met/mark! (mk-meter registry metric "failure")))
+            (mark! commander metric "failure"))
           (when error-fn
             (let [e (ex-info "Timeout with queue asynchronous call"
-                             {:commander (:label commander) :args args
-                              :timeout timeout :type :timeout
+                             {:commander (human-readable commander)
+                              :args args
+                              :timeout timeout
+                              :type :timeout
                               :options options})]
               (handle-error error-fn e)))
           (if fallback-fn
@@ -168,9 +121,7 @@
 
 (defn queue*
   [commander options run-fn args]
-  (let [^ExecutorService executor (:executor commander)
-        ^ScheduledExecutorService scheduler (:scheduler commander)
-        {:keys [metric timeout]} options
+  (let [{:keys [metric timeout]} options
         result (promise)
         queue-duration-atom (when metric (promise))
         call-duration-atom (when metric (promise))
@@ -180,12 +131,11 @@
                   :call-duration-atom call-duration-atom
                   :cancel-future-p cancel-future-p}
         ^Runnable task (mk-task commander options promises run-fn args)
-        [fut elapsed] (submit-task executor task)
+        [fut elapsed] (submit-task commander task)
         ^Runnable timeout-task (when timeout
                                  (mk-timeout-task commander options result fut args))]
     (when timeout-task
-      (let [cancel-fut (.schedule scheduler timeout-task
-                                  (- timeout elapsed) TimeUnit/MILLISECONDS)]
+      (let [cancel-fut (schedule! commander timeout-task (- timeout elapsed))]
         (deliver cancel-future-p cancel-fut)))
     (if metric
       (add-meta result {:queue-duration queue-duration-atom :call-duration call-duration-atom})
